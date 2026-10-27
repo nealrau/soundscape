@@ -1,0 +1,13 @@
+{
+  "name": "soundscape",
+  "version": "0.1.0",
+  "description": "Let Claude listen to your Mac — what it plays or what the microphone hears — and understand it as compact text: key, chords, tempo, melody, tuning, loudness, speech. Fully local, audio-only, no screen recording.",
+  "author": {
+    "name": "nealrau",
+    "url": "https://github.com/nealrau"
+  },
+  "homepage": "https://github.com/nealrau/soundscape",
+  "repository": "https://github.com/nealrau/soundscape",
+  "license": "MIT",
+  "keywords": ["audio", "music", "listening", "key-detection", "chords", "tempo", "tuner", "macos", "mcp"]
+}

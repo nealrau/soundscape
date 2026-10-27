@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Launch the Soundscape MCP server (stdio). Also usable as a CLI:
+#   bin/soundscape-mcp setup
+#   bin/soundscape-mcp listen '{"source":"output","focus":"key"}'
+# Needs any python3 >= 3.9 (the server itself is standard-library only); heavier analysis
+# dependencies live in ~/.soundscape/venv and are installed by the `setup` tool.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export HOME="${HOME:-$(echo ~)}"
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:/usr/bin:/bin"
+export PYTHONPATH="$ROOT/src"
+export PYTHONUTF8=1
+export PYTHONDONTWRITEBYTECODE=1
+
+PY=""
+for c in "${SOUNDSCAPE_PYTHON:-}" "${SOUNDSCAPE_HOME:-$HOME/.soundscape}/venv/bin/python" \
+         python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+  [ -z "$c" ] && continue
+  if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null; then
+    PY="$c"
+    break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "soundscape: python3 >= 3.9 not found (install Xcode Command Line Tools: xcode-select --install)" >&2
+  exit 1
+fi
+exec "$PY" -m soundscape_mcp "$@"

@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+build/
+.DS_Store
+*.wav
+!tests/fixtures/*.wav
