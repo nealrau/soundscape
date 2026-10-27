@@ -3,11 +3,11 @@
 # Soundscape
 
 **Let Claude listen to your Mac.** Soundscape is a Claude Code plugin that captures what your Mac
-is playing (system audio output) or what a microphone hears, analyses it on-device, and hands
-Claude a compact **text report**: key, chords, tempo, melody, tuning, loudness, and speech.
+is playing (system audio output) or what a microphone hears, analyses it on device, and hands
+Claude a compact **text report**: key, chords, tempo, melody, tuning, loudness, and speech. 
 
-- **Audio only, no screen recording.** System audio comes from Core Audio *process taps*, an
-  audio-only macOS API. No video frames ever reach Claude.
+- **There is no screen recording** System audio comes from Core Audio *process taps*, an
+  audio-only macOS API. 
 - **Few tokens.** A three-minute song becomes a report of roughly 300–600 tokens, not megabytes of
   audio or video.
 - **Fully local.** A local stdio MCP server plus a small Swift capture helper. Nothing leaves your Mac.
