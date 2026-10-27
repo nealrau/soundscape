@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import music
+from . import music, theory
 from .audio_io import ANALYSIS_SR, load_audio, resample
 from .dsp import EPS, frame_rms, frames_view, onset_envelope, spectral_peaks, stft_batches, to_db, yin
 
@@ -117,6 +117,12 @@ def analyze(path: str, start: float = 0.0, end: float | None = None, source: str
         res["active_seconds"] = 0.0
         return res
     first, last = np.nonzero(active)[0][[0, -1]]
+    # Did the music really begin/end inside this clip, or did the capture cut into it? Only real
+    # edges say anything about the key (a loop captured mid-stream "ends" wherever we stopped).
+    lead = first * rms_hop / sr_nat
+    trail = len(x_nat) / sr_nat - (last * rms_hop + rms_n) / sr_nat
+    res["edges"] = {"start": (source == "file" and start == 0) or lead >= 0.5,
+                    "end": (source == "file" and end is None) or trail >= 0.5}
     t0 = max(0, first * rms_hop - int(0.25 * sr_nat)) if trim else 0
     t1 = min(len(x_nat), last * rms_hop + rms_n + int(0.25 * sr_nat)) if trim else len(x_nat)
     res["trimmed"] = [t0 / sr_nat, t1 / sr_nat]
@@ -230,6 +236,7 @@ def analyze(path: str, start: float = 0.0, end: float | None = None, source: str
         res["key_choice"] = _choose_key(res, gbass)
         tonic, minor = res["key_choice"]["tonic"], res["key_choice"]["minor"]
         res["mode"] = music.mode_hint(gchroma, tonic, minor)
+        res["centre"] = _tonal_centre(res, gchroma, gbass)
         res["key_sections"] = _key_sections(chroma, tonal, frame_times) if dur >= 45 else []
 
     # --- pitch track (melody / tuner / voice) ---
@@ -258,7 +265,90 @@ def analyze(path: str, start: float = 0.0, end: float | None = None, source: str
     res.update(_speech_cues(e100, 100.0))
     res["content"] = _classify(res)
     res["timeline"] = _timeline(res, x, sr, frame_times, act)
+    res["theory"] = _theory(res, env, fps, sr, frame_times, act, (P_fi, P_f, P_a), ref, fr_rms)
+    pitched = sum(e["end"] - e["start"] for e in res["theory"]["events"] if e["id"]["kind"] != "cluster")
+    if res["content"]["label"] == "noise/ambience" and dur < 8 and pitched >= 0.5 * dur:
+        res["content"] = {"label": "music (isolated notes/chords)", "scores": res["content"]["scores"],
+                          "confidence": "medium"}
     return res
+
+
+def _theory(res, env, fps, sr, frame_times, act, peaks, ref, fr_rms) -> dict:
+    """Split the clip into sound events (onsets / silences) and name what each one is."""
+    P_fi, P_f, P_a = peaks
+    half = N_FFT / 2 / sr
+    regions, start = [], None
+    for i, a in enumerate(act):
+        if a and start is None:
+            start = i
+        if (not a or i == len(act) - 1) and start is not None:
+            end = i if a else i - 1
+            regions.append((max(0.0, frame_times[start] - half / 2), frame_times[end] + half / 2))
+            start = None
+    on_t = np.zeros(0)
+    if len(env) > 3 and env.std() > EPS:
+        thr = env.mean() + 1.0 * env.std()
+        pk = np.nonzero((env[1:-1] > env[:-2]) & (env[1:-1] >= env[2:]) & (env[1:-1] > thr))[0] + 1
+        on_t = pk / fps + 1024 / sr
+        if len(on_t):
+            keep = np.concatenate([[True], np.diff(on_t) > 0.12])
+            on_t = on_t[keep]
+    events = []
+    for rs, re_ in regions:
+        cuts = [t for t in on_t if rs + 0.2 < t < re_ - 0.2]
+        bounds = [rs] + cuts + [re_]
+        for a, b in zip(bounds[:-1], bounds[1:]):
+            if b - a >= 0.15:
+                events.append([a, b])
+    out_events = []
+    for a, b in events[:60]:
+        notes = theory.event_notes(P_fi, P_f, P_a, frame_times, a, b, ref)
+        midis = [n for n, _ in notes]
+        ident = theory.identify(midis)
+        if ident["kind"] == "none":
+            continue
+        pcs = sorted({m % 12 for m in midis})
+        in_ev = (frame_times >= a) & (frame_times <= b)
+        level = float(fr_rms[in_ev].max()) if in_ev.any() else 0.0
+        prev = out_events[-1] if out_events else None
+        if prev and (prev["pcs"] == pcs or (b - a < 0.35 and level < 0.5 * prev["level"])):
+            prev["end"] = b   # re-struck / sustained, or just the decay tail of the previous sound
+            continue
+        if prev and len(set(prev["pcs"]) ^ set(pcs)) == 1 and len(pcs) >= 2 and len(prev["pcs"]) >= 2 \
+                and min(b - a, prev["end"] - prev["start"]) < 0.4:
+            # one note gained/lost in a short edge fragment (attack, decay tail): same sonority
+            if b - a > prev["end"] - prev["start"]:
+                prev.update(notes=midis, pcs=pcs, id=ident)
+            prev["end"] = b
+            continue
+        out_events.append({"start": a, "end": b, "notes": midis, "pcs": pcs, "id": ident, "level": level})
+    centre = res.get("centre")
+    chords = [e["id"] for e in out_events if e["id"]["kind"] == "chord"]
+    if centre and len(chords) >= 2:
+        modal = bool(centre.get("mode")) and not centre["mode"].startswith(("Aeolian", "Harmonic"))
+        for e in out_events:
+            if e["id"]["kind"] == "chord":
+                e["roman"] = theory.roman_figured(e["id"], centre["tonic"], centre["minor"], modal)
+    mono = res.get("voiced_ratio", 0) > 0.6 and res.get("aperiodicity", 1) < 0.15
+    if mono and res.get("notes"):
+        melody = [n["midi"] for n in res["notes"] if n["dur"] >= 0.08]
+    else:
+        melody = [e["notes"][0] for e in out_events if e["id"]["kind"] == "note"]
+    melody = [m for i, m in enumerate(melody) if i == 0 or m != melody[i - 1]]
+    union = None
+    if 2 <= len(out_events) <= 12 and all(e["id"]["kind"] in ("note", "interval") for e in out_events):
+        allnotes = sorted({n for e in out_events for n in e["notes"]})
+        u = theory.identify(allnotes)
+        if u["kind"] == "chord":
+            union = u
+    return {
+        "events": out_events,
+        "melody": melody[:64],
+        "scale": theory.scale_match(melody),
+        "cadence": theory.cadence(chords, centre["tonic"], centre["minor"]) if centre and len(chords) >= 2 else None,
+        "union": union,
+        "mono": bool(mono),
+    }
 
 
 def _choose_key(res: dict, gbass) -> dict:
@@ -269,13 +359,15 @@ def _choose_key(res: dict, gbass) -> dict:
     if not relative or s1 - s2 > 0.15 or gbass is None:
         return choice
 
+    edges = res.get("edges", {"start": True, "end": True})
+
     def evidence(tonic):
         ev = 1.5 * gbass[tonic]
         segs = [s for s in res["chords"]["segments"] if s[2] is not None]
         if segs:
-            if segs[0][2][0] == tonic:
+            if edges["start"] and segs[0][2][0] == tonic:
                 ev += 0.15
-            if segs[-1][2][0] == tonic:
+            if edges["end"] and segs[-1][2][0] == tonic:
                 ev += 0.25
             total = sum(e - s for s, e, _ in segs)
             ev += 0.5 * sum(e - s for s, e, lab in segs if lab[0] == tonic) / max(total, EPS)
@@ -293,6 +385,70 @@ def _choose_key(res: dict, gbass) -> dict:
                             f"{music.key_name(t1, m1)} ({e1:.2f} vs {e2:.2f})")
     choice["evidence"] = [e1, e2]
     return choice
+
+
+DIATONIC_MODES = [  # (name, degree of the parent major scale it starts on, minor-family tonic chord)
+    ("Ionian (major)", 0, False), ("Dorian", 2, True), ("Phrygian", 4, True),
+    ("Lydian", 5, False), ("Mixolydian", 7, False), ("Aeolian (natural minor)", 9, True),
+]
+
+
+def _tonic_evidence(res: dict, gbass, pcs, tonic: int, minor_family) -> float:
+    """How much the music 'rests' on a pitch class: bass, emphasis, chord time, first/last chord."""
+    ev = 1.5 * gbass[tonic] + 0.8 * pcs[tonic]
+    segs = [s for s in res["chords"]["segments"] if s[2] is not None]
+    edges = res.get("edges", {"start": True, "end": True})
+    if segs:
+        if edges["start"] and segs[0][2][0] == tonic:
+            ev += 0.15
+        if edges["end"] and segs[-1][2][0] == tonic:
+            ev += 0.25
+        total = sum(e - s for s, e, _ in segs)
+        on_tonic = 0.0
+        for s, e, (root, suffix) in segs:
+            if root == tonic:
+                fits = minor_family is None or (suffix in ("m", "m7", "dim")) == minor_family
+                on_tonic += (e - s) * (1.0 if fits else 0.5)
+        ev += 0.5 * on_tonic / max(total, EPS)
+    return float(ev)
+
+
+def _tonal_centre(res: dict, gchroma, gbass) -> dict:
+    """Key profiles judge the *notes*; the tonal centre is where the music rests. For modal music
+    (e.g. a G#m7-Amaj7 vamp: same notes as E major / C# minor, but centred on G# = Phrygian) the
+    two disagree, and the centre is what a musician would call the key."""
+    kc, mh = res["key_choice"], res["mode"]
+    pcs = gchroma / (gchroma.sum() + EPS)
+    shares = [sum(pcs[(r + i) % 12] for i in music.MAJOR_SCALE) for r in range(12)]
+    parent = int(np.argmax(shares))
+    cands = sorted(((_tonic_evidence(res, gbass, pcs, (parent + off) % 12, fam), (parent + off) % 12, name, fam)
+                    for name, off, fam in DIATONIC_MODES), reverse=True)
+    e_best, t_best, name_best, fam_best = cands[0]
+    e_key = _tonic_evidence(res, gbass, pcs, kc["tonic"], kc["minor"])
+    centre = {"tonic": kc["tonic"], "minor": kc["minor"], "mode": None, "override": False,
+              "parent": parent, "in_scale": float(shares[parent]), "evidence": e_key,
+              "bass_share": float(gbass[kc["tonic"]])}
+    segs = [s for s in res["chords"]["segments"] if s[2] is not None]
+    total = sum(e - s for s, e, _ in segs) or 1.0
+    share = lambda t: sum(e - s for s, e, lab in segs if lab[0] == t) / total  # noqa: E731
+    # Override only when the music clearly *rests* on the new centre (not merely ends on it).
+    if (t_best != kc["tonic"] and shares[parent] >= 0.75 and e_best >= 1.3 * e_key and e_best - e_key >= 0.12
+            and share(t_best) >= 0.4 and share(t_best) > share(kc["tonic"])
+            and len(segs) >= 6 and sum(lab[0] == t_best for _, _, lab in segs) >= 2):
+        second = next((c for c in cands[1:] if c[1] != t_best), None)
+        ratio = e_best / max(second[0], EPS) if second else 9.0
+        centre.update(tonic=t_best, minor=fam_best, override=True, evidence=e_best,
+                      mode=None if name_best in ("Ionian (major)", "Aeolian (natural minor)") else name_best,
+                      confidence="high" if ratio >= 1.6 else "medium" if ratio >= 1.2 else "low",
+                      runner_up=(second[1], second[2]) if second else None,
+                      bass_share=float(gbass[t_best]),
+                      chord_share=share(t_best))
+    else:
+        best = mh["best"]
+        default = "Aeolian (natural minor)" if kc["minor"] else "Ionian (major)"
+        if best != default and mh["shares"][best] - mh["shares"][default] >= 0.03:
+            centre["mode"] = best
+    return centre
 
 
 def _key_sections(chroma, tonal, frame_times, win_s=20.0, hop_s=10.0):

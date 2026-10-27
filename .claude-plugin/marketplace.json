@@ -10,7 +10,7 @@
     {
       "name": "soundscape",
       "description": "Let Claude listen to your Mac — system audio output or microphone — and describe it as compact text: key, chords, tempo, melody, tuning, loudness, speech. Local, audio-only.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": {
         "name": "nealrau"
       },

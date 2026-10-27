@@ -9,9 +9,11 @@ from pathlib import Path
 from . import environment as env
 from .sessions import REGISTRY, Session
 
-FOCI = ["overview", "key", "chords", "tempo", "melody", "tuning", "mix", "speech", "all"]
+FOCI = ["overview", "key", "chords", "tempo", "melody", "tuning", "mix", "speech", "theory", "all"]
 FOCUS = {"type": "string", "enum": FOCI, "default": "overview",
          "description": "What to analyse in depth. overview=everything briefly; key=key/mode/tonal centre; "
+                        "theory=ear-training read of each sound (chord quality + inversion/figured bass, intervals, "
+                        "scales, cadences); "
                         "chords=progression with Roman numerals; tempo=BPM/pulse; melody=note sequence; "
                         "tuning=tuner (Hz/cents per held note); mix=loudness/tonal balance; "
                         "speech=speech cues + transcript; all=every section."}
@@ -113,7 +115,9 @@ def _glance(s: Session) -> str:
     ok, out = env.run_engine(["analyze", str(s.path), "--source", s.source, "--detail", "brief",
                               "--label", _label(s)])
     lines = out.splitlines()[1:3] if ok else []
-    return f"{_label(s)} at a glance: " + " | ".join(lines) if lines else ""
+    if not lines or "noise/ambience" in lines[0]:
+        return f"{_label(s)}: only background noise." if lines else ""
+    return f"{_label(s)} at a glance: " + " | ".join(lines)
 
 
 def _analyze_group(s: Session, focus: str, detail: str, start: float = 0.0, save: bool = True) -> str:
@@ -246,7 +250,7 @@ def t_wait(args, ctx):
     s = REGISTRY.get(args.get("session_id"))
     return _wait(ctx, s, args.get("until", "sound_then_silence"),
                  float(min(900, max(1, args.get("max_seconds", 120)))),
-                 float(max(0.5, args.get("silence_seconds", 4))), float(max(0.0, args.get("min_sound_seconds", 3))))
+                 float(max(0.5, args.get("silence_seconds", 4))), float(max(0.0, args.get("min_sound_seconds", 1))))
 
 
 def t_peek(args, ctx):
@@ -282,7 +286,7 @@ def t_listen(args, ctx):
     until = args.get("until", "sound_then_silence")
     s = _start_session(ctx, args.get("source", "output"), args.get("device"), int(seconds) + 5, args.get("label"),
                        include_system_audio=args.get("include_system_audio", True))
-    status = _wait(ctx, s, until, seconds, float(args.get("silence_seconds", 4)), 3.0)
+    status = _wait(ctx, s, until, seconds, float(args.get("silence_seconds", 4)), 1.0)
     s.stop()
     ctx.progress("Analysing…")
     out = _analyze_group(s, args.get("focus", "overview"), args.get("detail", "standard"))
@@ -366,7 +370,8 @@ TOOLS = [
                       "default": "sound_then_silence"},
             "max_seconds": {"type": "number", "default": 120, "description": "Give up after this long (≤900)."},
             "silence_seconds": {"type": "number", "default": 4},
-            "min_sound_seconds": {"type": "number", "default": 3},
+            "min_sound_seconds": {"type": "number", "default": 1,
+                                  "description": "Sound needed before silence can end the wait (a quiz chord can be ~1 s)."},
         }},
         "handler": t_wait,
     },

@@ -67,8 +67,37 @@ CHORDS (beat grid; numerals in A minor)
 TEMPO: 99 BPM (confidence high; could also be felt as 200 or 50) · steady
 ```
 
-Every report can focus on one of: `overview` · `key` · `chords` · `tempo` · `melody` · `tuning` ·
-`mix` · `speech` · `all`. Each comes at `brief`, `standard` or `full` detail.
+### Ear training / music-theory questions
+
+Short clips (a chord, an interval, a scale, a cadence) get an event-by-event theory read. Ask
+`/soundscape:input what kind of chord is this?` and play the chord, on the Mac (muted is fine) or
+into the mic:
+
+```text
+THEORY (each sound event; notes low→high, as heard)
+  #1 0:00.2–0:02.7  B2 D3 F#3 G#3 → G#ø7: G# half-diminished seventh (ø7, dm7), 6/5 (1st inversion)
+       spelled G#–B–D–F# · bass B · soprano G#3 · above bass: m3 P5 M6
+       could also be spelled: Bm6 (minor sixth (added 6th))
+```
+
+```text
+  #4 0:03.1–0:04.0  G2 G3 B3 D4 F4 → G7: G dominant seventh (Mm7, major-minor 7th), 7 (root position) · V7 in C major
+  #5 0:04.0–0:05.2  C2 E3 G3 C5 → C: C major triad, 5/3 (root position) · I in C major
+  cadence (in C major): perfect authentic cadence (PAC): V(7)→I, both in root position, tonic in the soprano
+```
+
+It covers:
+- **Chords:** every triad and seventh-chord quality (MM7, Mm7, mm7, ø7, °7, mM7, +M7), plus sus, 6 and 9 chords.
+- **Inversions:** with figured bass and spelled tones.
+- **Intervals:** harmonic and melodic, simple and compound.
+- **Scales:** major, the minors, the modes, pentatonic, blues, whole-tone, octatonic.
+- **Cadences:** PAC, IAC, HC, plagal, deceptive, Phrygian HC.
+
+Modal music gets its real tonal centre. A G#m7 → Amaj7 vamp is reported as **G# Phrygian (i7 – ♭IImaj7)**,
+not just "C# minor" because it shares those notes.
+
+Every report can focus on one of: `overview` · `key` · `chords` · `theory` · `tempo` · `melody` ·
+`tuning` · `mix` · `speech` · `all`. Each comes at `brief`, `standard` or `full` detail.
 
 ## How it works
 
@@ -169,9 +198,14 @@ Claude to run `setup` with `install_transcription: true`. That installs [mlx-whi
 
 ## Accuracy & limits
 
-The test suite (`tests/`) checks the engine on synthesized music with known answers. It covers keys
-(C, Bb detuned +31 cents, F#, A harmonic minor, E minor vs its relative G major), tempo (84 / 100 / 128 BPM),
-tuner accuracy (±4 cents), speech vs music, and silence.
+The test suite (`tests/`, 19 tests) checks the engine on synthesized music with known answers:
+
+- **Keys:** C, Bb detuned +31 cents, F#, A harmonic minor, E minor vs its relative G major.
+- **Modal centres:** G# Phrygian, D Dorian, G Mixolydian.
+- **Tempo:** 84 / 100 / 128 BPM.
+- **Chords:** all ten triad and seventh qualities, inversions with figured bass, and spelling (G#°7 = G#–B–D–F).
+- **Intervals, scales and cadences:** harmonic and melodic intervals, Dorian and harmonic-minor scales, PAC and HC.
+- **Other:** tuner accuracy (±4 cents), speech vs music, and silence.
 
 Real recordings are harder. Expect the main error to be **relative-key confusion** (C major vs A minor),
 which the report flags. Dense or heavily distorted mixes and drum-only tracks give lower-confidence key
@@ -203,7 +237,7 @@ skills/output/    /soundscape:output
 skills/input/     /soundscape:input
 bin/              soundscape-mcp launcher (server + CLI)
 helper/           Swift capture helper + Info.plist + build script
-src/              soundscape_mcp (server), soundscape_engine (analysis)
+src/              soundscape_mcp (server), soundscape_engine (analysis; theory.py = ear training)
 tests/            synthetic-audio accuracy tests
 ```
 

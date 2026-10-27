@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 
-from . import music
+from . import music, theory
 
-FOCI = ("overview", "key", "chords", "tempo", "melody", "tuning", "mix", "speech", "all")
+FOCI = ("overview", "key", "chords", "tempo", "melody", "tuning", "mix", "speech", "theory", "all")
 WEAK_KEY = 0.45  # below this profile fit there is no meaningful key
 SOURCE_LABEL = {"output": "system audio output", "input": "input device", "file": "file"}
 
@@ -25,13 +25,33 @@ def _conf_word(v: float, hi: float, mid: float) -> str:
     return "high" if v >= hi else "medium" if v >= mid else "low"
 
 
+def mode_short(mode: str | None) -> str | None:
+    return mode.split(" (")[0] if mode else None
+
+
+def centre_label(res: dict) -> str | None:
+    """'G# Phrygian', 'D Dorian', 'A minor'… — the key as a musician would name it."""
+    ce = res.get("centre")
+    if not ce:
+        return None
+    names = music.spelling(ce["parent"], False) if ce.get("override") else music.spelling(ce["tonic"], ce["minor"])
+    if ce.get("mode"):
+        return f"{names[ce['tonic']]} {mode_short(ce['mode'])}"
+    return music.key_name(ce["tonic"], ce["minor"])
+
+
 class Ctx:
     def __init__(self, res: dict):
         self.res = res
-        kc = res.get("key_choice")
-        self.tonic = kc["tonic"] if kc else None
-        self.minor = kc["minor"] if kc else None
-        self.names = music.spelling(self.tonic, self.minor)
+        ce = res.get("centre")
+        self.tonic = ce["tonic"] if ce else None
+        self.minor = ce["minor"] if ce else None
+        self.modal = bool(ce and ce.get("mode") and not ce["mode"].startswith(("Aeolian", "Harmonic")))
+        if ce and ce.get("override"):
+            self.names = music.spelling(ce["parent"], False)
+        else:
+            self.names = music.spelling(self.tonic, self.minor)
+        self.label = centre_label(res)
         self.t0 = res.get("offset", 0.0)
 
     def chord(self, lab) -> str:
@@ -40,7 +60,7 @@ class Ctx:
     def numeral(self, lab) -> str:
         if lab is None or self.tonic is None:
             return "—"
-        return music.roman(lab[0], lab[1], self.tonic, self.minor)
+        return music.roman(lab[0], lab[1], self.tonic, self.minor, self.modal)
 
 
 # --- sections ------------------------------------------------------------------------------
@@ -67,8 +87,25 @@ def sec_key(c: Ctx, full: bool) -> list[str]:
     if kc["score"] < WEAK_KEY:
         return [f"KEY: no clear tonal centre — best guess {name}, but the fit is weak ({kc['score']:.2f}). "
                 "Likely noise, speech, percussion, or very dense/atonal audio."]
+    ce = res.get("centre") or {}
+    if ce.get("override"):
+        parent = music.spelling(ce["parent"], False)[ce["parent"]]
+        rel_minor = music.MINOR_KEY_NAMES[(ce["parent"] + 9) % 12]
+        out = [f"KEY: {c.label}  (tonal centre {c.names[ce['tonic']]}; confidence {ce['confidence']})",
+               f"  same notes as {parent} major / {rel_minor} minor — a key-profile reading of the notes alone says "
+               f"{name} ({kc['score']:.2f}), but the music rests on {c.names[ce['tonic']]}: bass "
+               f"{ce['bass_share'] * 100:.0f}% on it, chords rooted there {ce['chord_share'] * 100:.0f}% of the time"]
+        if ce.get("runner_up"):
+            t2, m2 = ce["runner_up"]
+            out.append(f"  other centre considered: {c.names[t2]} {mode_short(m2)}")
+        out.append(f"  {ce['in_scale'] * 100:.0f}% of pitched energy fits the {c.label} scale")
+        tune = res.get("tuning") or {}
+        if tune and (full or abs(tune.get("cents", 0)) >= 8):
+            out.append(f"  tuning: A4 ≈ {tune['a4_hz']:.1f} Hz ({tune['cents']:+.0f} cents vs 440)")
+        return out
     conf = key_confidence(res)
-    out = [f"KEY: {name}  (confidence {conf}; profile fit {kc['score']:.2f})"]
+    head = c.label if ce.get("mode") else name
+    out = [f"KEY: {head}  (confidence {conf}; profile fit {kc['score']:.2f})"]
     alts = []
     for t, m, s in res["keys"]:
         if (t, m) == (kc["tonic"], kc["minor"]):
@@ -139,7 +176,7 @@ def sec_chords(c: Ctx, level: str) -> list[str]:
     if not segs or (c.res.get("key_strength", 0) < WEAK_KEY and level != "full"):
         return ["CHORDS: no clear harmony detected."]
     grid = c.res["chords"]["grid"]
-    key = f"; numerals in {music.key_name(c.tonic, c.minor)}" if c.tonic is not None else ""
+    key = f"; numerals in {c.label}" if c.tonic is not None else ""
     out = [f"CHORDS ({grid} grid{key})"]
     loop = music.find_loop([s[2] for s in segs])
     if loop:
@@ -156,6 +193,87 @@ def sec_chords(c: Ctx, level: str) -> list[str]:
     out.append(f"  timeline: {line}" + (f" · … (+{len(segs) - limit} more)" if limit and len(segs) > limit else ""))
     first, last = segs[0][2], segs[-1][2]
     out.append(f"  opens on {c.chord(first)}, ends on {c.chord(last)}")
+    return out
+
+
+def _nn(midi: int, spelled: dict) -> str:
+    return f"{spelled.get(midi % 12) or theory.ROOT_NAMES[midi % 12][0]}{midi // 12 - 1}"
+
+
+def _event_line(i: int, e: dict, c: Ctx) -> list[str]:
+    d = e["id"]
+    spelled = {}
+    if d["kind"] == "chord":
+        for name in d["tones"]:
+            letter = theory.LETTERS.index(name[0])
+            pc = (theory.NATURAL[letter] + name.count("#") - name.count("b")) % 12
+            spelled[pc] = name
+    notes = " ".join(_nn(m, spelled) for m in e["notes"])
+    head = f"  #{i} {ts(e['start'] + c.t0, True)}–{ts(e['end'] + c.t0, True)}  {notes} →"
+    if d["kind"] == "note":
+        return [f"{head} single note{'' if 'doubled' not in d['desc'] else ' (' + d['desc'].split('single note ')[1] + ')'}"]
+    if d["kind"] == "interval":
+        line = f"{head} harmonic interval {d['name']}"
+        return [line + (f" — {d['note']}" if d.get("note") else "")]
+    if d["kind"] == "cluster":
+        return [f"{head} cluster/non-tertian sonority (pitch classes "
+                + " ".join(theory.ROOT_NAMES[p][0] for p in d["pcs"]) + ")"]
+    pos = d["figure"] or (f"{d['bass_name']} in the bass" if d["inversion"] != 0 else "root position")
+    line = f"{head} {d['symbol']}: {d['root_name']} {d['name']}, {pos}"
+    if d.get("incomplete"):
+        line += f" ({d['incomplete']})"
+    if e.get("roman"):
+        line += f" · {e['roman']} in {c.label}"
+    lines = [line, f"       spelled {'–'.join(d['tones'])} · bass {_nn(d['bass'], spelled)[:-1]} · "
+                   f"soprano {_nn(d['top'], spelled)} · above bass: {' '.join(dict.fromkeys(d['intervals_above_bass']))}"]
+    if d["symmetric"]:
+        lines.append("       (symmetrical chord: the root/spelling is only certain from context)")
+    if d["alternatives"]:
+        lines.append(f"       could also be spelled: {'; '.join(d['alternatives'])}")
+    return lines
+
+
+def sec_theory(c: Ctx, full: bool) -> list[str]:
+    th = c.res.get("theory") or {}
+    events = th.get("events") or []
+    if not events:
+        return ["THEORY: no distinct pitched events found."]
+    out = ["THEORY (each sound event; notes low→high, as heard)"]
+    limit = None if full else 12
+    for i, e in enumerate(events[:limit] if limit else events, start=1):
+        out += _event_line(i, e, c)
+    if limit and len(events) > limit:
+        out.append(f"  … +{len(events) - limit} more events (detail=full lists all)")
+    if th.get("union"):
+        u = th["union"]
+        pos = u["figure"] or "root position"
+        out.append(f"  all notes together (arpeggio/broken chord): {'–'.join(u['tones'])} → {u['symbol']}: "
+                   f"{u['root_name']} {u['name']}, {pos} (lowest note {theory.note_name(u['bass'])})")
+    mel = th.get("melody") or []
+    if 2 <= len(mel) <= 24:
+        steps = []
+        for a, b in zip(mel, mel[1:]):
+            arrow = "↑" if b > a else "↓"
+            steps.append(f"{theory.note_name(a)}→{theory.note_name(b)} {arrow}{theory.interval_name(b - a).split(' ')[0]}")
+        out.append("  melodic intervals: " + " · ".join(steps[:16]) + (" …" if len(steps) > 16 else ""))
+    elif len(mel) > 24:
+        out.append(f"  melody: {len(mel)} notes ({theory.note_name(min(mel))}–{theory.note_name(max(mel))}); "
+                   "see NOTES/melody focus for the sequence")
+    sc = th.get("scale")
+    if sc and sc["fit"] >= 0.7:
+        tonic = theory.ROOT_NAMES[sc["tonic"]][0]
+        extra = ""
+        if not sc["exact"]:
+            bits = []
+            if sc["extra"]:
+                bits.append("extra " + ", ".join(theory.ROOT_NAMES[(sc['tonic'] + i) % 12][0] for i in sc["extra"]))
+            if sc["missing"]:
+                bits.append("missing " + ", ".join(theory.ROOT_NAMES[(sc['tonic'] + i) % 12][0] for i in sc["missing"]))
+            extra = f" (closest match; {'; '.join(bits)})"
+        out.append(f"  scale: {tonic} {sc['name']}, {sc['direction']} {theory.note_name(sc['low'])}–"
+                   f"{theory.note_name(sc['high'])}{extra}")
+    if th.get("cadence"):
+        out.append(f"  cadence (in {c.label}): {th['cadence']}")
     return out
 
 
@@ -310,8 +428,9 @@ def sec_timeline(c: Ctx) -> list[str]:
 def glance(c: Ctx) -> str:
     r = c.res
     bits = []
-    if r.get("key_choice") and r["key_choice"]["score"] >= WEAK_KEY:
-        bits.append(f"{music.key_name(c.tonic, c.minor)} ({key_confidence(r)})")
+    if r.get("key_choice") and r["key_choice"]["score"] >= WEAK_KEY and r.get("duration", 0) >= 5:
+        ce = r.get("centre") or {}
+        bits.append(f"{c.label} ({ce['confidence'] if ce.get('override') else key_confidence(r)})")
     t = r.get("tempo")
     if t and t["confidence"] >= 0.12:
         bits.append(f"{t['bpm']:.0f} BPM")
@@ -345,7 +464,7 @@ def render(res: dict, focus: str = "overview", detail: str = "standard", label: 
     g = glance(c)
     if g:
         lines.append(f"At a glance: {g}")
-    if res.get("duration", 0) < 8 and focus not in ("tuning", "melody"):
+    if res.get("duration", 0) < 8 and focus not in ("tuning", "melody", "theory"):
         lines.append("Note: short clip — key/tempo estimates firm up with 20 s or more of audio.")
 
     full = detail == "full"
@@ -378,12 +497,20 @@ def render(res: dict, focus: str = "overview", detail: str = "standard", label: 
             secs += [sec_timeline(c)]
     elif focus == "speech":
         secs += [sec_speech(c, full, transcript)]
+    elif focus == "theory":
+        secs += [sec_theory(c, full)]
+        n_chords = sum(e["id"]["kind"] == "chord" for e in (res.get("theory") or {}).get("events", []))
+        if not brief and (n_chords >= 3 or res.get("duration", 0) >= 12):
+            secs += [sec_key(c, False), sec_chords(c, "short")]
     elif focus == "all":
-        secs += [sec_key(c, True), sec_chords(c, "full"), sec_tempo(c, True), sec_notes(c, True),
+        secs += [sec_key(c, True), sec_chords(c, "full"), sec_theory(c, True), sec_tempo(c, True), sec_notes(c, True),
                  sec_tuner(c), sec_mix(c, True), sec_speech(c, True, transcript), sec_timeline(c)]
     else:  # overview
         if is_speech:
             secs += [sec_speech(c, full, transcript)]
+        n_events = len((res.get("theory") or {}).get("events", []))
+        if not is_speech and res.get("duration", 0) < 12 and 0 < n_events <= 8:
+            secs += [sec_theory(c, False)]  # short clip: a chord, interval or scale question
         if not brief:
             if res.get("keys") and not (is_speech and ct["confidence"] == "high"):
                 secs += [sec_key(c, False), sec_chords(c, "short"), sec_tempo(c, False)]

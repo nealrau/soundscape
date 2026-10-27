@@ -175,11 +175,13 @@ def chord_label(root: int, suffix: str, names) -> str:
     return names[root] + suffix
 
 
-def roman(root: int, suffix: str, tonic: int, minor: bool) -> str:
+def roman(root: int, suffix: str, tonic: int, minor: bool, modal: bool = False) -> str:
+    """Modal centres use accidentals relative to the major scale (Phrygian bII, Mixolydian bVII);
+    minor keys use the usual minor-key numerals (III, VI, VII)."""
     deg = (root - tonic) % 12
     major_map = ["I", "bII", "II", "bIII", "III", "IV", "#IV", "V", "bVI", "VI", "bVII", "VII"]
     minor_map = ["I", "bII", "II", "III", "#III", "IV", "#IV", "V", "VI", "#VI", "VII", "#VII"]
-    num = (minor_map if minor else major_map)[deg]
+    num = (minor_map if minor and not modal else major_map)[deg]
     acc = "".join(ch for ch in num if ch in "b#")
     core = num.lstrip("b#")
     if suffix in ("m", "m7", "dim"):

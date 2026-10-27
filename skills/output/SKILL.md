@@ -1,6 +1,6 @@
 ---
 name: output
-description: Listen to what the Mac is playing (system audio output from any app — music, video, calls, a DAW) and tell the user what's in it — key, chords, tempo, melody, tuning, loudness/mix, or what's being said. Use when the user asks "what key is this song in?", "what are the chords?", "what BPM is this?", "listen to what I'm playing", "how loud is my master?".
+description: Listen to what the Mac is playing (system audio output from any app — music, video, calls, a DAW) and tell the user what's in it — key, chords, tempo, melody, tuning, loudness/mix, or what's being said. Also answers music-theory / ear-training questions about a chord, interval, scale or cadence (quality, inversion, figured bass, Roman numerals). Use when the user asks "what key is this song in?", "what are the chords?", "what kind of chord is this?", "what BPM is this?", "listen to what I'm playing", "how loud is my master?".
 argument-hint: "[question, e.g. what key is this in?]"
 allowed-tools: [mcp__plugin_soundscape_soundscape__setup, mcp__plugin_soundscape_soundscape__start, mcp__plugin_soundscape_soundscape__wait, mcp__plugin_soundscape_soundscape__peek, mcp__plugin_soundscape_soundscape__stop, mcp__plugin_soundscape_soundscape__listen, mcp__plugin_soundscape_soundscape__analyze_file, mcp__plugin_soundscape_soundscape__sessions]
 ---
@@ -20,7 +20,8 @@ compact **text report** — never raw audio. Don't ask for screen recordings, up
    - System audio permission `undetermined` → tell the user: *"First run: macOS will ask to let
      **Soundscape Capture** record system audio — click Allow."* Then continue (step 3 triggers the prompt).
    - `denied` → give the user the System Settings path from the setup output and stop.
-2. **Pick a focus** from the question: key/scale → `key` · chords/progression → `chords` ·
+2. **Pick a focus** from the question: what kind of chord / interval / scale / cadence, inversion, figured bass, Roman numerals,
+   "spell this chord" → `theory` · key/tonal centre → `key` · chords/progression → `chords` ·
    BPM/tempo → `tempo` · melody/riff/notes → `melody` · in tune? → `tuning` · loudness/EQ/mix → `mix` ·
    what's being said / transcribe → `speech` · anything else → `overview`.
 3. **Start.** `start` with `source: "output"`.
@@ -42,6 +43,27 @@ compact **text report** — never raw audio. Don't ask for screen recordings, up
      and name the alternative (*"could also be heard as C major, the relative major — but it keeps landing on Am"*).
    - Mention tuning only if it's notably off 440 Hz (that matters for playing along).
    - Don't paste the raw report unless asked; mention the saved report path once.
+
+## Music-theory questions (`theory` focus)
+
+Typical for ear training or AP Music Theory practice: *"what kind of chord is this?"*, *"what interval?"*,
+*"which cadence?"*, *"what inversion?"*. The sound is often only one or two seconds long, so use
+`wait` with `silence_seconds: 2.5` (the default `min_sound_seconds: 1` catches even a short chord).
+The `THEORY` section lists every sound event: its notes from low to high (with octaves), and for each one:
+
+- **Chords:** root and quality in standard terms. Triads: major / minor / diminished / augmented.
+  Sevenths: MM7, Mm7 (dominant), mm7, ø7 (dm7, half-diminished), °7 (dd7, fully diminished), mM7, +M7.
+  Also sus, add6 and 9ths. Each comes with its inversion, figured bass (5/3, 6, 6/4 · 7, 6/5, 4/3, 4/2),
+  spelled tones, bass and soprano. With 2+ chords and a clear key it adds a Roman numeral
+  (e.g. `V65 in C major`) and names the **cadence** (PAC / IAC / HC / plagal / deceptive / Phrygian HC).
+- **Intervals:** harmonic (sounding together) or melodic (↑/↓ between notes), e.g. `↑M6`, `P5`, `A4/d5`.
+- **Scales:** tonic, type (major, the minors, the modes, pentatonic, blues, whole-tone, octatonic) and direction.
+
+Answer the way a theory teacher would: *"That's a **half-diminished seventh chord (ø7)** on G#, in
+**first inversion (6/5)** — spelled G#–B–D–F# with B in the bass."* Mention the report's alternatives
+when they matter. Some are enharmonic (Bm6 = G#ø7/B). Some are symmetrical: a °7 or + chord's root depends
+on spelling and context. If the user gives the key, use the spelled chord to state the Roman numeral and
+function (e.g. vii°7 or ii°65).
 
 ## Notes for interpreting reports
 

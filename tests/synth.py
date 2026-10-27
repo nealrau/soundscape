@@ -9,7 +9,8 @@ import numpy as np
 SR = 44100
 NOTE = {n: i for i, n in enumerate(["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"])}
 NOTE.update({"Db": 1, "Eb": 3, "Gb": 6, "Ab": 8, "Bb": 10})
-QUAL = {"": [0, 4, 7], "m": [0, 3, 7], "7": [0, 4, 7, 10], "dim": [0, 3, 6]}
+QUAL = {"": [0, 4, 7], "m": [0, 3, 7], "7": [0, 4, 7, 10], "dim": [0, 3, 6], "m7": [0, 3, 7, 10],
+        "maj7": [0, 4, 7, 11]}
 
 
 def hz(midi: float, a4: float = 440.0) -> float:
@@ -63,3 +64,24 @@ def write_wav(path: str, x: np.ndarray, sr: int = SR):
         w.setsampwidth(2)
         w.setframerate(sr)
         w.writeframes((np.clip(x, -1, 1) * 32767).astype("<i2").tobytes())
+
+
+def chord(midis: list[int], dur: float = 2.5, seed: int = 0, decay: float = 0.8) -> np.ndarray:
+    """A block chord / interval of exact MIDI notes (piano-like tones), plus a short tail of silence."""
+    rng = np.random.default_rng(seed)
+    out = np.zeros(int((dur + 0.6) * SR))
+    for m in midis:
+        n = tone(hz(m), dur, 0.2 * rng.uniform(0.8, 1.2), decay)
+        out[: len(n)] += n
+    return (0.8 * out / np.max(np.abs(out))).astype(np.float32)
+
+
+def sequence(events: list[list[int]], dur: float = 0.5, gap: float = 0.05) -> np.ndarray:
+    """Notes/chords one after another (melodies, scales, cadences)."""
+    parts = []
+    for ev in events:
+        c = chord(ev, dur, decay=2.0)[: int(dur * SR)]
+        parts += [c, np.zeros(int(gap * SR), np.float32)]
+    parts.append(np.zeros(int(0.6 * SR), np.float32))
+    x = np.concatenate(parts)
+    return (0.8 * x / np.max(np.abs(x))).astype(np.float32)
