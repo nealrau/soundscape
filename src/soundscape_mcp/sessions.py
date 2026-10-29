@@ -10,6 +10,8 @@ import signal
 import subprocess
 import threading
 import time
+import wave
+from pathlib import Path
 from collections import deque
 from datetime import datetime
 
@@ -33,6 +35,12 @@ class Session:
         self.label = label
         self.path = env.SESSIONS / f"{self.id}.wav"
         self.report_path = env.SESSIONS / f"{self.id}.md"
+        self.segments = [(self.path, 0.0)]
+        self._files_lock = threading.Lock()
+        self.last_analysis_path = None
+        self.last_analysis_window = None
+        self.stream_cursor = 0.0
+        self.stream_lock = threading.Lock()
         self.state = "starting"
         self.error: dict | None = None
         self.info: dict = {}
@@ -73,6 +81,13 @@ class Session:
             kind = ev.get("event")
             if kind == "level":
                 self._on_level(ev)
+            elif kind == "segment":
+                with self._files_lock:
+                    self.segments.append((Path(ev["path"]), float(ev["start"])))
+                    # Keep two completed five-minute segments plus the active segment.
+                    while len(self.segments) > 3:
+                        old, _ = self.segments.pop(0)
+                        old.unlink(missing_ok=True)
             elif kind == "started":
                 self.info = ev
                 self.state = "recording"
@@ -147,6 +162,43 @@ class Session:
                 self.proc.kill()
                 self._ended.wait(2)
 
+    def snapshot(self, destination: Path, last_seconds: float = 30, start: float | None = None):
+        """Copy a bounded, immutable PCM window, including across segment boundaries."""
+        end = self.audio_t
+        begin = max(0.0, end - last_seconds) if start is None else max(0.0, start, end - 600)
+        count = 0
+        with self._files_lock, wave.open(str(destination), "wb") as out:
+            params = None
+            begin = max(begin, self.segments[0][1])
+            for path, offset in self.segments:
+                if offset >= end:
+                    break
+                with wave.open(str(path), "rb") as src:
+                    rate = src.getframerate()
+                    left = max(0, int((begin - offset) * rate))
+                    right = min(src.getnframes(), int((end - offset) * rate))
+                    if right <= left:
+                        continue
+                    current = (src.getnchannels(), src.getsampwidth(), rate)
+                    if params is None:
+                        params = current
+                        out.setnchannels(current[0]); out.setsampwidth(current[1]); out.setframerate(rate)
+                    elif current != params:
+                        raise ValueError("Audio format changed; start a new listening session.")
+                    src.setpos(left)
+                    out.writeframes(src.readframes(right - left))
+                    count += right - left
+            if params is None:
+                out.setnchannels(1); out.setsampwidth(2); out.setframerate(48000)
+        if not count:
+            destination.unlink(missing_ok=True)
+            raise ValueError("No audio available in this window yet. Play a clip and try again.")
+        return begin, end
+
+    def recording_paths(self):
+        with self._files_lock:
+            return [p for p, _ in self.segments]
+
     def current_level(self) -> float:
         with self._lock:
             recent = [l[1] for l in list(self.levels)[-5:]]
@@ -177,6 +229,8 @@ class Session:
             parts.append(f"Mac audio output: {self.companion._summary()}")
         elif self.companion_error:
             parts.append(f"Mac audio output not captured ({self.companion_error})")
+        if self.max_seconds == 0:
+            parts.append("continuous " + ("ON" if self.running else "OFF") + "; last 10–15 min retained")
         return " · ".join(parts)
 
 

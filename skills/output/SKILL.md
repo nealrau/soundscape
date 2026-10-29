@@ -2,18 +2,19 @@
 name: output
 description: Listen to what the Mac is playing (system audio output from any app — music, video, calls, a DAW) and tell the user what's in it — key, chords, tempo, melody, tuning, loudness/mix, or what's being said. Also answers music-theory / ear-training questions about a chord, interval, scale or cadence (quality, inversion, figured bass, Roman numerals). Use when the user asks "what key is this song in?", "what are the chords?", "what kind of chord is this?", "what BPM is this?", "listen to what I'm playing", "how loud is my master?".
 argument-hint: "[question, e.g. what key is this in?]"
-allowed-tools: [mcp__plugin_soundscape_soundscape__setup, mcp__plugin_soundscape_soundscape__start, mcp__plugin_soundscape_soundscape__wait, mcp__plugin_soundscape_soundscape__peek, mcp__plugin_soundscape_soundscape__stop, mcp__plugin_soundscape_soundscape__listen, mcp__plugin_soundscape_soundscape__analyze_file, mcp__plugin_soundscape_soundscape__sessions]
 ---
 
 # Soundscape · listen to the Mac's audio output
 
 The user wants you to listen to what their Mac is playing. Their question: **$ARGUMENTS**
-(If it's empty, give a general read of what's playing.)
+(If empty or init/on, enable continuous listening and return.)
 
 You hear through the local `soundscape` MCP server. It captures audio on-device and hands you a
-compact **text report** — never raw audio. Don't ask for screen recordings, uploads or files.
+compact **text report**, with optional replay files and practice-question images. Don't ask for screen recordings, uploads or files.
 
 ## Steps
+
+For off/stop, call `stop(analyze=false)` immediately and return; do not run setup or start.
 
 1. **Set up.** Call `setup`.
    - Any `PROBLEM` line → relay it in plain words and stop.
@@ -24,17 +25,16 @@ compact **text report** — never raw audio. Don't ask for screen recordings, up
    "spell this chord" → `theory` · key/tonal centre → `key` · chords/progression → `chords` ·
    BPM/tempo → `tempo` · melody/riff/notes → `melody` · in tune? → `tuning` · loudness/EQ/mix → `mix` ·
    what's being said / transcribe → `speech` · anything else → `overview`.
-3. **Start.** `start` with `source: "output"`.
-4. **Cue the user** in one short line, e.g. *"🎧 Listening to your Mac — play it now. I'll analyse
-   when it stops (or just tell me to stop)."*
-5. **Stay listening.** `wait` with `until: "sound_then_silence"`, `max_seconds: 120`.
-   - *audio stopped* → step 6.
-   - *timed out while still playing* → for key/chords/tempo, 45 s+ of sound is plenty: go to step 6.
-     Otherwise `wait` again (give up after ~10 minutes total).
-   - *no sound at all* → tell the user nothing is coming through (is it playing? unmuted?) and offer to
-     keep listening. If the result mentions digital silence + permission, relay that fix.
-6. **Analyse.** `stop` with the chosen `focus` and `detail: "standard"` (use `"full"` only if they want
-   the whole chord/note timeline).
+3. **Start or reuse continuous capture.** `start` with `source: "output"`, `continuous: true`.
+   Input also captures desktop audio by default. With AirPods, prefer the built-in Mac microphone
+   from the device list unless the user chose another input.
+4. **Cue the user:** "Listening is ON — play the clip, then ask your question." If this was just
+   init/on, return immediately. Capture continues between turns.
+5. **Read recent audio.** For a question use `peek` with `last_seconds: 30`, the selected focus and
+   `detail: "standard"`. For a future clip, a bounded `wait` may precede `peek`.
+6. **Keep capture ON.** Never stop after silence or an answer. For off/stop, call
+   `stop(analyze=false)` immediately, skipping setup and waiting. For multiple-choice images,
+   replay, incremental reports, or transcription follow [Soundscape](../soundscape/SKILL.md).
 7. **Answer.**
    - Lead with the direct answer in one line: *"It's in **A minor**."*
    - Back it with 2–4 bullets from the report in musician-friendly terms: the progression with Roman
