@@ -17,11 +17,14 @@ log = logging.getLogger("soundscape")
 SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
 
 INSTRUCTIONS = (
-    "Soundscape lets you hear the user's Mac locally, as compact text reports instead of audio. "
-    "Flow: setup → start(source='output' for what the Mac plays, 'input' for the microphone) → tell the user to "
-    "play the audio → wait(until='sound_then_silence') → stop(focus=…) → answer from the report. "
-    "Use listen for one-shot clips and analyze_file for files on disk. Reports give confidence levels: "
-    "state uncertainty honestly (e.g. relative major/minor ambiguity)."
+    "Soundscape captures Mac audio locally, including audio playing through AirPods. "
+    "For input ON/init: setup → start(source='input', continuous=true, include_system_audio=true). "
+    "Prefer a built-in Mac input device when AirPods are used for playback. For desktop audio alone use output. "
+    "Keep listening between questions: peek/stream analyse snapshots without stopping. Silence does not turn it off. "
+    "OFF means stop(analyze=false). Client disconnect also stops capture. Reports are pulled on tool calls, not pushed. "
+    "For music-theory practice use peek(focus='all', detail='full', source='output'), "
+    "practice_card for a multiple-choice PNG, replay to hear the clip. Speech transcription requires setup "
+    "with install_transcription=true. Distinguish speech transcripts from estimated musical notes; state uncertainty."
 )
 
 
@@ -83,7 +86,8 @@ class Server:
         if req_id in self.cancelled:
             self.cancelled.discard(req_id)
             return
-        self.reply(req_id, {"content": [{"type": "text", "text": text}], "isError": is_error})
+        self.reply(req_id, text if isinstance(text, dict) else
+                   {"content": [{"type": "text", "text": text}], "isError": is_error})
 
     def handle(self, msg: dict):
         method, req_id, params = msg.get("method"), msg.get("id"), msg.get("params") or {}

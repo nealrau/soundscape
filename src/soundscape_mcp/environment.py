@@ -117,7 +117,7 @@ def devices() -> dict:
 def engine_state() -> str:
     if not VENV_PY.exists():
         return "missing"
-    proc = run([VENV_PY, "-c", "import numpy"], timeout=60)
+    proc = run([VENV_PY, "-c", "import numpy, PIL"], timeout=60)
     return "ok" if proc.returncode == 0 else "broken"
 
 
@@ -133,6 +133,8 @@ def pip_install(packages: list[str]) -> tuple[bool, str]:
 
 def build_engine() -> tuple[bool, str]:
     HOME.mkdir(parents=True, exist_ok=True)
+    if VENV_PY.exists():
+        return pip_install(["numpy>=1.24", "Pillow>=10"])
     if VENV.exists():
         shutil.rmtree(VENV)
     uv = find_uv()
@@ -142,7 +144,7 @@ def build_engine() -> tuple[bool, str]:
         proc = run([sys.executable, "-m", "venv", VENV], timeout=600)
     if proc.returncode != 0:
         return False, (proc.stderr or proc.stdout).strip()[-1500:]
-    ok, msg = pip_install(["numpy>=1.24"])
+    ok, msg = pip_install(["numpy>=1.24", "Pillow>=10"])
     return ok, "installed numpy into " + str(VENV) if ok else msg
 
 

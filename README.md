@@ -2,7 +2,7 @@
 
 # Soundscape
 
-**Let Claude listen to your Mac.** Soundscape is a Claude Code plugin that captures what your Mac
+**Let Codex or Claude listen to your Mac.** Soundscape is a Claude Code plugin that captures what your Mac
 is playing (system audio output) or what a microphone hears, analyses it on device, and hands
 Claude a compact **text report**: key, chords, tempo, melody, tuning, loudness, and speech. 
 
@@ -22,6 +22,50 @@ Claude a compact **text report**: key, chords, tempo, melody, tuning, loudness, 
 
 ---
 
+
+## Continuous listening in Codex (0.3.0)
+
+Install the plugin locally with the supported Codex plugin flow:
+
+```bash
+codex plugin marketplace add /absolute/path/to/soundscape
+codex plugin add soundscape@soundscape
+```
+
+Start a new Codex chat after installation (restart the app if the new tools are not visible).
+Use `$soundscape input on` or say **Soundscape input on**. Play your clip and then ask:
+
+> Identify the chord progression, transcribe the notes, make a multiple-choice practice image,
+> and play the excerpt back.
+
+Say **Soundscape input off** to stop. In Claude, `/soundscape:input` now also stays on between
+questions. `start(continuous=true)` returns immediately; `peek` and `stream` analyse recent
+snapshots without ending capture. Silence does not stop listening. The MCP connection must stay
+open: closing its chat/client or restarting the server stops capture. `stream` provides reports
+when called, not automatic chat messages while the assistant is idle.
+
+**AirPods:** select AirPods as your Mac's output. The system-audio tap captures what plays through
+them. Prefer **MacBook Pro Microphone** (or your actual built-in input from `setup`) for mic capture;
+selecting an AirPods microphone may switch the Bluetooth audio mode. Desktop-only capture uses
+`source="output"` and needs no microphone.
+
+**Tools added:** `stream` (incremental reports), `replay` (saved WAV and optional local playback),
+and `practice_card` (multiple-choice PNG). Replay defaults to the exact last analysed excerpt,
+up to 120 seconds, so it still works after answering/rendering. Use `from_analysis=false` to replay
+the latest audio instead. Playback can enter the system tap; do not treat it as fresh evidence.
+Practice images are original AP-style study material, not official AP questions. Soundscape does
+not capture desktop screenshots; it can pair audio reports with a screenshot you supply to Codex.
+
+Speech transcription uses optional local mlx-whisper (`setup(install_transcription=true)`);
+its weights download on first use. Musical note/chord transcription remains an estimate, not a
+complete engraved polyphonic score. The agent supplies image question/choices from the report.
+
+Continuous capture rotates WAV segments every five minutes and retains the active segment plus
+the two previous segments (10–15 minutes). Queries read up to 10 minutes; the default is 30 seconds.
+Stopping a continuous session analyses the last minute, or use `stop(analyze=false)` for immediate
+OFF. Saved excerpts/images expire through the normal seven-day cleanup; `purge_recordings` removes
+all saved session artifacts. All capture and analysis run locally.
+
 ## Slash commands
 
 | Command | Listens to | Good for |
@@ -37,7 +81,7 @@ nothing playing on the Mac, and it analyses the mic.
 
 The first run sets everything up automatically. It builds the capture helper, installs the analysis
 engine, and macOS asks once for permission. Then Claude starts listening and tells you to play.
-It keeps listening until the audio stops and answers from the report. You can also just ask in plain words ("listen to what I'm
+It keeps listening between questions until you turn it off; each answer uses a recent snapshot. You can also just ask in plain words ("listen to what I'm
 playing and tell me the key"): both commands double as model-invoked skills.
 
 ## Example report (what Claude reads)
@@ -121,13 +165,12 @@ flowchart LR
 
 ### MCP tools
 
-`setup` · `start` · `wait` · `peek` · `stop` · `listen` · `analyze_file` · `sessions`.
+`setup` · `start` · `wait` · `peek` · `stream` · `replay` · `practice_card` · `stop` · `listen` · `analyze_file` · `sessions`.
 
 `start`/`listen` with `source: "input"` also capture system audio unless `include_system_audio: false`.
 
-A typical run is `setup → start(source) → wait(until="sound_then_silence") → stop(focus)`. `wait`
-blocks while streaming progress, which is how Claude "stays listening". `listen` does the whole
-cycle in one call. `analyze_file` reports on any audio or video file on disk.
+A continuous run is `setup → start(source, continuous=true) → peek/stream → … → stop`.
+`wait` can wait for the next clip without ending capture. `listen` performs a timed one-shot capture. `analyze_file` reports on any audio or video file on disk.
 
 ## Install
 
@@ -187,8 +230,8 @@ while your Mac is muted, so you can analyse something silently.
 - Recordings and reports go to `~/.soundscape/sessions/` so you can re-analyse them. They are
   **deleted automatically after 7 days** (set `SOUNDSCAPE_RETENTION_DAYS`). Ask Claude to purge them
   (`sessions` with `purge_recordings: true`), or pass `keep_audio: false` to `stop`.
-- Capture runs only while a session is active. It auto-stops after `max_seconds` (default 10 min), and
-  the helper exits if the server goes away.
+- Capture runs only while a session is active. Timed sessions auto-stop after `max_seconds` (default
+  10 min); continuous sessions stay on until stopped. All helpers exit if the server goes away.
 
 ## Optional: speech transcription
 
@@ -198,7 +241,7 @@ Claude to run `setup` with `install_transcription: true`. That installs [mlx-whi
 
 ## Accuracy & limits
 
-The test suite (`tests/`, 19 tests) checks the engine on synthesized music with known answers:
+The test suite (`tests/`) checks the engine on synthesized music with known answers:
 
 - **Keys:** C, Bb detuned +31 cents, F#, A harmonic minor, E minor vs its relative G major.
 - **Modal centres:** G# Phrygian, D Dorian, G Mixolydian.

@@ -254,7 +254,11 @@ func findInputDevice(_ query: String?) -> AudioObjectID? {
 // MARK: - WAV sink: downmix to mono, write 16-bit PCM, meter levels
 
 final class WavSink {
-    let file: UnsafeMutablePointer<FILE>
+    var file: UnsafeMutablePointer<FILE>
+    let basePath: String
+    let segmentSeconds: Double
+    private var segmentStart: Int64 = 0
+    private var segmentIndex = 0
     let sampleRate: Double
     let levelFrames: Int
     private(set) var frames: Int64 = 0
@@ -266,7 +270,9 @@ final class WavSink {
     private var scratch = [Int16]()
     private var mono = [Float]()
 
-    init(path: String, sampleRate: Double, levelInterval: Double) {
+    init(path: String, sampleRate: Double, levelInterval: Double, segmentSeconds: Double = 0) {
+        self.basePath = path
+        self.segmentSeconds = segmentSeconds
         guard let f = fopen(path, "wb") else { die("cannot open \(path) for writing", code: "io") }
         file = f
         self.sampleRate = sampleRate
@@ -275,7 +281,7 @@ final class WavSink {
     }
 
     private func writeHeader() {
-        let dataBytes = UInt32(clamping: frames * 2)
+        let dataBytes = UInt32(clamping: (frames - segmentStart) * 2)
         var h = Data()
         func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { h.append(contentsOf: $0) } }
         func u16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { h.append(contentsOf: $0) } }
@@ -293,6 +299,17 @@ final class WavSink {
 
     /// Consume Float32 buffers (interleaved or not, any channel count) and append mono PCM.
     func consume(_ ablPtr: UnsafePointer<AudioBufferList>) {
+        if segmentSeconds > 0 && Double(frames - segmentStart) / sampleRate >= segmentSeconds {
+            writeHeader()
+            fclose(file)
+            segmentIndex += 1
+            segmentStart = frames
+            let next = basePath + ".part-\(segmentIndex).wav"
+            guard let f = fopen(next, "wb") else { die("cannot open \(next)", code: "io") }
+            file = f
+            writeHeader()
+            emit("segment", ["path": next, "start": Double(frames) / sampleRate])
+        }
         let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: ablPtr))
         var n = Int.max
         var totalChannels = 0
@@ -572,7 +589,8 @@ func cmdRecord(_ args: [String]) -> Never {
         die("--source must be 'output' or 'input'", code: "usage")
     }
 
-    let sink = WavSink(path: out, sampleRate: source.sampleRate, levelInterval: levelInterval)
+    let segmentSeconds = seconds <= 0 ? max(1, Double(option("--segment-seconds", in: args) ?? "300") ?? 300) : 0
+    let sink = WavSink(path: out, sampleRate: source.sampleRate, levelInterval: levelInterval, segmentSeconds: segmentSeconds)
     activeSource = source
     activeSink = sink
 
